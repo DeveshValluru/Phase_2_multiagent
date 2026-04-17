@@ -1,0 +1,76 @@
+benchmark: ideabench
+
+# Data paths (override via env vars or CLI)
+data:
+  repo_root: external/IdeaBench
+  papers_path: null                # auto-detect from repo_root/data/
+  references_path: null
+  # IdeaBench low-resource setting (matches Phase 1)
+  num_ref: 3
+  num_hyp: 3
+  all_ref: false
+  filtered_ref: true
+
+# Serving — two models, used in SEPARATE SLURM jobs
+llm:
+  # Phase A: generation
+  base_url: ${VLLM_LLAMA_URL:-http://localhost:8000/v1}
+  model: meta-llama/Llama-3.3-70B-Instruct
+  api_key: EMPTY
+  max_tokens: 1024
+  request_timeout: 600
+  max_retries: 3
+  backoff_seconds: 5
+
+judge:
+  # Phase B: evaluation / judge
+  base_url: ${VLLM_QWEN_URL:-http://localhost:8001/v1}
+  model: Qwen/Qwen3-32B
+  api_key: EMPTY
+  max_tokens: 2048            # Qwen thinking traces are long
+  request_timeout: 600
+  max_retries: 3
+  backoff_seconds: 5
+  strip_think: true
+
+# Agent knobs
+retrieval:
+  top_k: 3                     # re-rank of the 3 allowed reference abstracts
+
+planner:
+  enabled: true
+  num_angles: 6
+
+generator:
+  num_drafts: 6                # one per angle
+  retrieval_mix:               # all 6 drafts see re-ranked refs
+    - with_refs
+    - with_refs
+    - with_refs
+    - with_refs
+    - with_refs
+    - with_refs
+  temperatures: [0.5, 0.7, 0.9, 0.5, 0.7, 0.9]
+
+critic:
+  rubric_weights:
+    grounding: 0.25
+    specificity: 0.25
+    coherence: 0.15
+    novelty: 0.20
+    feasibility: 0.15
+
+refiner:
+  max_iters: 2
+  plateau_delta: 0.5
+  refine_top_k: 3              # refine only the top 3 drafts
+
+selector:
+  mode: submodular_top_3       # diverse top-3 for final output
+  diversity_lambda: 0.3
+
+# Execution / checkpointing
+run:
+  output_dir: checkpoints/ideabench
+  final_output: outputs/ideabench_final.jsonl
+  judge_output: outputs/ideabench_judge.jsonl

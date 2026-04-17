@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+logs/
+outputs/
+checkpoints/
+external/SCIMON/
+external/IdeaBench/
+*.sif
+*.npz
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,63 @@
+benchmark: scimon
+
+# Data paths (override via env vars or CLI)
+data:
+  # Root of the cloned SCIMON repo (external/SCIMON by default)
+  repo_root: external/SCIMON
+  # Location of the 114K training corpus + 194 gold test set.
+  # Set to null to auto-detect from repo_root/data/.
+  train_corpus_path: null
+  gold_test_path: null
+  # SentenceBERT index cache. If the file exists, it's reused; otherwise built.
+  sbert_index_path: checkpoints/scimon_sbert_index.npz
+  sbert_model: sentence-transformers/all-MiniLM-L6-v2
+
+# Serving
+llm:
+  # vLLM OpenAI-compatible endpoint (Llama-3.3-70B generator)
+  base_url: ${VLLM_LLAMA_URL:-http://localhost:8000/v1}
+  model: meta-llama/Llama-3.3-70B-Instruct
+  api_key: EMPTY
+  max_tokens: 512
+  request_timeout: 300
+  max_retries: 3
+  backoff_seconds: 5
+
+# Agent knobs
+retrieval:
+  top_k: 20
+
+planner:
+  enabled: false    # single-sentence output, no decomposition needed
+
+generator:
+  # Retrieval-mix: two drafts with retrieved neighbors as few-shot,
+  # two without. Prevents ROUGE-L regression seen in Phase 1.
+  num_drafts: 4
+  retrieval_mix:
+    - with_neighbors
+    - with_neighbors
+    - no_retrieval
+    - no_retrieval
+  temperatures: [0.3, 0.7, 0.3, 0.7]
+
+critic:
+  # 5-axis rubric, weights sum to 1.0
+  rubric_weights:
+    grounding: 0.30
+    specificity: 0.25
+    coherence: 0.15
+    local_novelty: 0.15
+    gold_likeness: 0.15
+
+refiner:
+  max_iters: 2
+  plateau_delta: 0.5        # composite score delta below this = early stop
+
+selector:
+  mode: best_1
+
+# Execution / checkpointing
+run:
+  output_dir: checkpoints/scimon
+  final_output: outputs/scimon_final.jsonl
