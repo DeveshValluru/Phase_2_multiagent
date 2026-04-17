@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from agents.prompts import (
@@ -75,12 +76,15 @@ class Generator:
         angles: list[str],
         temperatures: list[float],
     ) -> list[dict[str, Any]]:
-        """One draft per angle. Returns list of {hypothesis_json, angle, temp}."""
+        """One draft per angle. Returns list of {hypothesis_json, angle, temp}.
+
+        Draft generations run in parallel via a ThreadPoolExecutor so that vLLM
+        can batch them server-side (continuous batching). Order is preserved.
+        """
         assert len(angles) == len(temperatures), "angles and temperatures must align"
         ref_block = "\n\n".join(f"[{i+1}] {r}" for i, r in enumerate(references))
 
-        drafts = []
-        for angle, temp in zip(angles, temperatures):
+        def _one(angle: str, temp: float) -> dict[str, Any]:
             user = GEN_USER_IDEABENCH.format(references=ref_block, angle=angle)
             msg = [
                 {"role": "system", "content": GEN_SYSTEM_IDEABENCH},
@@ -95,5 +99,9 @@ class Generator:
             if not isinstance(obj, dict):
                 # Fallback: wrap raw text
                 obj = {"title": "", "hypothesis": text.strip(), "method": "", "expected_outcome": ""}
-            drafts.append({"hypothesis": obj, "angle": angle, "temperature": temp, "raw": text})
+            return {"hypothesis": obj, "angle": angle, "temperature": temp, "raw": text}
+
+        # len(angles) is typically 6; well under vLLM's max_num_seqs=16.
+        with ThreadPoolExecutor(max_workers=max(1, len(angles))) as ex:
+            drafts = list(ex.map(_one, angles, temperatures))
         return drafts

@@ -7,6 +7,7 @@ from any point, and sharding lets multiple team members work in parallel.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -168,9 +169,14 @@ class Pipeline:
             references=refs, angles=angles, temperatures=temps[: len(angles)],
         )
 
-        # 4. Score each draft
-        for d in drafts:
-            scored = self.critic.score_ideabench(candidate=d["hypothesis"], references=refs)
+        # 4. Score each draft (parallel — drafts are independent)
+        def _score(d: dict) -> dict:
+            return self.critic.score_ideabench(candidate=d["hypothesis"], references=refs)
+
+        with ThreadPoolExecutor(max_workers=max(1, len(drafts))) as ex:
+            scored_list = list(ex.map(_score, drafts))
+
+        for d, scored in zip(drafts, scored_list):
             d.update({"composite": scored["composite"], "scores": scored["scores"],
                       "critique": scored["critique"]})
 
