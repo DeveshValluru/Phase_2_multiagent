@@ -180,14 +180,23 @@ class Pipeline:
             d.update({"composite": scored["composite"], "scores": scored["scores"],
                       "critique": scored["critique"]})
 
-        # 5. Refine top-k
+        # 5. Refine top-k (parallel across drafts — each refinement is independent;
+        # the inner iteration loop within one refinement stays sequential because
+        # iter N+1 depends on iter N's critique.)
         refine_top_k = int(self.cfg["refiner"].get("refine_top_k", inst["num_hyp"]))
         drafts_sorted = sorted(drafts, key=lambda d: d["composite"], reverse=True)
-        for d in drafts_sorted[:refine_top_k]:
-            refined = self.refiner.refine_ideabench(
+        to_refine = drafts_sorted[:refine_top_k]
+
+        def _refine(d: dict) -> dict:
+            return self.refiner.refine_ideabench(
                 candidate=d["hypothesis"], critique=d["critique"],
                 references=refs, starting_composite=d["composite"],
             )
+
+        with ThreadPoolExecutor(max_workers=max(1, len(to_refine))) as ex:
+            refined_list = list(ex.map(_refine, to_refine))
+
+        for d, refined in zip(to_refine, refined_list):
             d["hypothesis"] = refined["hypothesis"]
             d["composite"] = refined["composite"]
             d["refine_history"] = refined["history"]
