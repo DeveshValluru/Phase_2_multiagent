@@ -75,3 +75,7 @@ run:
   output_dir: checkpoints/ideabench
   final_output: outputs/ideabench_final.jsonl
   judge_output: outputs/ideabench_judge.jsonl
+  # How many papers to process in parallel. Each paper peaks at ~6 concurrent
+  # LLM requests (generator / critic), so instance_concurrency=2 peaks at ~12
+  # concurrent (75% of vLLM's max_num_seqs=16).
+  instance_concurrency: 2

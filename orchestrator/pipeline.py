@@ -7,7 +7,8 @@ from any point, and sharding lets multiple team members work in parallel.
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -80,15 +81,28 @@ class Pipeline:
             todo = [x for x in instances if x["instance_id"] not in done]
             log.info("processing %d / %d instances", len(todo), len(instances))
 
-            for inst in tqdm(todo, desc=f"{self.benchmark}", unit="inst"):
+            # Instance-level concurrency: multiple papers processed in parallel.
+            # Default 1 keeps original sequential behavior. Raising this feeds
+            # vLLM more concurrent requests -> higher HPU utilization.
+            instance_concurrency = int(
+                self.cfg.get("run", {}).get("instance_concurrency", 1)
+            )
+            ckpt_lock = threading.Lock()
+            # InlineReRanker wraps a SentenceTransformer with a lazy-loaded
+            # model; serialize calls to avoid init races and concurrent encode
+            # contention. The call is short (CPU-only, <1s) so no throughput loss.
+            reranker_lock = threading.Lock()
+
+            def _process_one(inst: dict) -> None:
                 if self.client is not None and self.client.term_requested:
-                    log.warning("SIGTERM received — flushing and exiting cleanly")
-                    break
+                    return
                 try:
                     if self.benchmark == "scimon":
                         rec = self._run_scimon(inst, corpus_index)
                     elif self.benchmark == "ideabench":
-                        rec = self._run_ideabench(inst, inline_reranker)
+                        wrapped = _LockedReRanker(inline_reranker, reranker_lock) \
+                            if inline_reranker is not None else None
+                        rec = self._run_ideabench(inst, wrapped)
                     else:
                         raise ValueError(f"unknown benchmark: {self.benchmark}")
                     out = adapter.format_output(inst, rec)
@@ -100,7 +114,47 @@ class Pipeline:
                         "status": "error",
                         "error": str(e),
                     }
-                ckpt.append(out)
+                with ckpt_lock:
+                    ckpt.append(out)
+
+            if instance_concurrency <= 1:
+                # Sequential (original behavior)
+                for inst in tqdm(todo, desc=f"{self.benchmark}", unit="inst"):
+                    if self.client is not None and self.client.term_requested:
+                        log.warning("SIGTERM received — flushing and exiting cleanly")
+                        break
+                    _process_one(inst)
+            else:
+                log.info("outer-loop concurrency: %d papers in flight", instance_concurrency)
+                with ThreadPoolExecutor(max_workers=instance_concurrency) as ex:
+                    futures = {ex.submit(_process_one, inst): inst for inst in todo}
+                    try:
+                        for fut in tqdm(
+                            as_completed(futures),
+                            total=len(futures),
+                            desc=f"{self.benchmark}",
+                            unit="inst",
+                        ):
+                            # Force any exceptions inside the future to surface
+                            # (they're already logged inside _process_one, but
+                            # re-raise so debuggers see them).
+                            try:
+                                fut.result()
+                            except Exception as e:
+                                log.exception("worker future raised: %s", e)
+
+                            if self.client is not None and self.client.term_requested:
+                                log.warning("SIGTERM received — cancelling remaining futures")
+                                for f in futures:
+                                    if not f.done():
+                                        f.cancel()
+                                break
+                    except KeyboardInterrupt:
+                        log.warning("KeyboardInterrupt — cancelling futures")
+                        for f in futures:
+                            if not f.done():
+                                f.cancel()
+                        raise
         finally:
             self.teardown()
 
@@ -214,3 +268,20 @@ class Pipeline:
 
     def _output_path(self) -> Path:
         return Path(self.cfg["run"]["output_dir"]).expanduser() / "generation.jsonl"
+
+
+class _LockedReRanker:
+    """Thin wrapper that serializes InlineReRanker.rerank() calls.
+
+    SentenceTransformer lazy-init + encode() isn't guaranteed thread-safe; since
+    a reranker call is short (CPU-only) we just serialize it rather than try
+    to make it concurrent.
+    """
+
+    def __init__(self, inner, lock: threading.Lock):
+        self._inner = inner
+        self._lock = lock
+
+    def rerank(self, *args, **kwargs):
+        with self._lock:
+            return self._inner.rerank(*args, **kwargs)
