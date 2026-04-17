@@ -1,40 +1,44 @@
 #!/bin/bash
 #SBATCH --job-name=phase2-ideabench-judge
 #SBATCH --partition=gaudi
+#SBATCH --qos=class_gaudi
+#SBATCH --account=class_cse59827694spring2026
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=256G
+#SBATCH --gres=gpu:hl225:8
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=320G
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/ideabench_judge_%j.out
 #SBATCH --error=logs/ideabench_judge_%j.err
 #SBATCH --signal=B:SIGTERM@60
 
-# -------- IdeaBench judge pass (Qwen3-32B, TP=4) --------
+# -------- IdeaBench judge pass (Qwen3-32B, TP=8) --------
 # Runs AFTER generation jobs finish and results are merged.
 # Usage:
-#   sbatch --export=PREDICTIONS=outputs/ideabench_final.jsonl,OUT=outputs/ideabench_judge.jsonl \
-#     scripts/evaluation_ideabench.slurm
+#   sbatch --export=ALL,PREDICTIONS=outputs/ideabench_final.jsonl,OUT=outputs/ideabench_judge.jsonl \
+#       scripts/evaluation_ideabench.slurm
 
 set -euo pipefail
-
-module purge || true
-module load cuda || true
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 mkdir -p logs outputs
 
+# Phase-1 proven env
+# shellcheck disable=SC1091
+source serving/sol_env.sh
+
 export VLLM_QWEN_URL="http://localhost:8001/v1"
 PORT=8001
-MODEL="Qwen/Qwen3-32B"
-TP=4
+MODEL="${QWEN_MODEL_ID}"
+TP=8
 MAX_LEN=16384
 
 PREDICTIONS="${PREDICTIONS:-outputs/ideabench_final.jsonl}"
 OUT="${OUT:-outputs/ideabench_judge.jsonl}"
 
-bash serving/start_vllm.sh "$MODEL" "$TP" "$PORT" "$MAX_LEN" > logs/vllm_judge_$SLURM_JOB_ID.log 2>&1 &
+bash serving/start_vllm.sh "$MODEL" "$TP" "$PORT" "$MAX_LEN" \
+    > logs/vllm_judge_${SLURM_JOB_ID}.log 2>&1 &
 VLLM_PID=$!
 
 cleanup() {
@@ -45,9 +49,9 @@ cleanup() {
 trap cleanup EXIT SIGTERM SIGINT
 
 echo "[slurm] waiting for Qwen vLLM readiness..."
-for i in $(seq 1 240); do
+for i in $(seq 1 180); do
     if curl -fsS "http://localhost:${PORT}/health" > /dev/null 2>&1; then
-        echo "[slurm] Qwen ready after ${i}s"
+        echo "[slurm] Qwen ready after $((i*5))s"
         break
     fi
     sleep 5

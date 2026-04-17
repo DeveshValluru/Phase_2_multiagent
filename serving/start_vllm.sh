@@ -2,26 +2,30 @@
 # Launch a vLLM OpenAI-compatible server on Intel Gaudi 2 HPUs.
 #
 # Usage:
-#   start_vllm.sh <model_id> <tensor_parallel> <port> [<max_model_len>]
+#   start_vllm.sh <model_id_or_path> <tensor_parallel> <port> [<max_model_len>]
 #
-# Env:
-#   APPTAINER_IMAGE   path to container .sif (required if running in container)
-#   VLLM_EXTRA_ARGS   optional extra args forwarded to vllm serve
+# Default path: uses Sol's pre-built /packages/envs/gaudi-pytorch-vllm (Phase-1
+# proven). To run inside an Apptainer container instead, set APPTAINER_IMAGE
+# to a .sif path.
 #
-# Designed to be `srun`ed from a SLURM script (see scripts/*.slurm).
+# Env vars (all set in serving/sol_env.sh):
+#   VLLM_ENGINE_ITERATION_TIMEOUT_S, VLLM_RPC_TIMEOUT, VLLM_PROMPT_USE_FUSEDSDPA,
+#   PT_HPU_LAZY_MODE, PT_HPU_ENABLE_LAZY_COLLECTIVES, HABANA_VISIBLE_DEVICES,
+#   GC_KERNEL_PATH, VLLM_GRAPH_RESERVED_MEM, HF_HOME.
 
 set -euo pipefail
 
-MODEL="${1:?model id required}"
+MODEL="${1:?model id or path required}"
 TP="${2:?tensor parallel size required}"
 PORT="${3:?port required}"
-MAX_LEN="${4:-2048}"
+MAX_LEN="${4:-4096}"
 
-export HABANA_VISIBLE_DEVICES="${HABANA_VISIBLE_DEVICES:-all}"
-export PT_HPU_LAZY_MODE=1
-export VLLM_GRAPH_RESERVED_MEM="${VLLM_GRAPH_RESERVED_MEM:-0.1}"
-# Helps avoid idle timeout on long runs
-export VLLM_RPC_TIMEOUT="${VLLM_RPC_TIMEOUT:-600000}"
+# Source Sol env if not already sourced by caller SLURM script
+if [[ -z "${VLLM_ENGINE_ITERATION_TIMEOUT_S:-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/sol_env.sh"
+fi
 
 ARGS=(
     --model "$MODEL"
@@ -29,10 +33,10 @@ ARGS=(
     --port "$PORT"
     --host 0.0.0.0
     --dtype bfloat16
+    --block-size 128
     --max-model-len "$MAX_LEN"
+    --max-num-seqs "${MAX_NUM_SEQS:-16}"
     --gpu-memory-utilization "${GPU_MEM_UTIL:-0.85}"
-    --max-num-seqs "${MAX_NUM_SEQS:-8}"
-    --enable-prefix-caching
     --trust-remote-code
 )
 
@@ -42,9 +46,11 @@ if [[ -n "${VLLM_EXTRA_ARGS:-}" ]]; then
 fi
 
 if [[ -n "${APPTAINER_IMAGE:-}" && -f "$APPTAINER_IMAGE" ]]; then
-    echo "launching vLLM inside Apptainer: $APPTAINER_IMAGE"
-    exec apptainer exec --nv "$APPTAINER_IMAGE" python -m vllm.entrypoints.openai.api_server "${ARGS[@]}"
+    echo "[start_vllm] launching vLLM inside Apptainer: $APPTAINER_IMAGE"
+    exec apptainer exec --nv "$APPTAINER_IMAGE" \
+        python -m vllm.entrypoints.openai.api_server "${ARGS[@]}"
 else
-    echo "launching vLLM on host Python (no container)"
+    echo "[start_vllm] launching vLLM via Sol host Python (/packages/envs/gaudi-pytorch-vllm)"
+    echo "[start_vllm] which python: $(which python)"
     exec python -m vllm.entrypoints.openai.api_server "${ARGS[@]}"
 fi
