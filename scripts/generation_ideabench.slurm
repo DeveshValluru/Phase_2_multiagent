@@ -19,8 +19,10 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# SLURM copies the script to its spool dir; use the submission dir as repo root
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$REPO_ROOT"
+echo "[slurm] cwd=$PWD host=$(hostname) user=$(whoami)"
 mkdir -p logs outputs
 
 # Phase-1 proven env
