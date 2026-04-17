@@ -4,10 +4,10 @@ benchmark: scimon
 data:
   # Root of the cloned SCIMON repo (external/SCIMON by default)
   repo_root: external/SCIMON
-  # Location of the 114K training corpus + 194 gold test set.
-  # Set to null to auto-detect from repo_root/data/.
-  train_corpus_path: null
-  gold_test_path: null
+  # Verified locations in EagleW/SCIMON after extracting the zip files.
+  # Set to null to fall back to auto-detection.
+  train_corpus_path: external/SCIMON/data/local_context_dataset/train.json
+  gold_test_path: external/SCIMON/data/gold_subset/idea_sentence.json
   # SentenceBERT index cache. If the file exists, it's reused; otherwise built.
   sbert_index_path: checkpoints/scimon_sbert_index.npz
   sbert_model: sentence-transformers/all-MiniLM-L6-v2

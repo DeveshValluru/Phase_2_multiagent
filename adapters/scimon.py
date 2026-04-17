@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 # Plausible layouts observed across SCIMON forks
 _GOLD_CANDIDATES = [
+    "data/gold_subset/idea_sentence.json",      # actual layout in EagleW/SCIMON
     "data/gold/test.json",
     "data/gold/gold_test.json",
     "data/local_context_dataset/test_gold.json",
@@ -122,7 +123,12 @@ class ScimonAdapter:
     # ---- per-instance normalization -----------------------------------
 
     def _normalize_instance(self, raw: dict, idx: int) -> dict:
-        """Map a raw SCIMON instance to {instance_id, context, seeds, relation, gold}."""
+        """Map a raw SCIMON instance to {instance_id, context, seeds, relation, gold}.
+
+        EagleW/SCIMON gold_subset/idea_sentence.json schema:
+          id, context, entity (str), relation, output (short node), rel_sent (full sentence)
+        We use rel_sent as the gold (full-sentence task), entity as the seed.
+        """
         iid = str(raw.get("id") or raw.get("instance_id") or idx)
         context = (
             raw.get("context")
@@ -132,16 +138,31 @@ class ScimonAdapter:
         )
         if isinstance(context, list):
             context = " ".join(str(c) for c in context)
-        seeds = (
-            raw.get("seed_terms")
+        # Seed: prefer 'entity' (SCIMON schema) then fall back to seed/entities lists
+        seeds_raw = (
+            raw.get("entity")
+            or raw.get("seed_terms")
             or raw.get("seeds")
             or raw.get("entities")
             or []
         )
-        if isinstance(seeds, str):
-            seeds = [s.strip() for s in seeds.split(",") if s.strip()]
+        if isinstance(seeds_raw, str):
+            seeds = [s.strip() for s in seeds_raw.split(",") if s.strip()]
+        elif isinstance(seeds_raw, list):
+            seeds = [str(s) for s in seeds_raw]
+        else:
+            seeds = [str(seeds_raw)]
         relation = str(raw.get("relation") or raw.get("relation_type") or "used-for")
-        gold = raw.get("gold") or raw.get("target") or raw.get("output") or raw.get("idea") or ""
+        # Gold: rel_sent (full sentence) is the target for the idea-sentence task.
+        # Fall back to other field names for compatibility with other layouts.
+        gold = (
+            raw.get("rel_sent")
+            or raw.get("gold")
+            or raw.get("target")
+            or raw.get("idea")
+            or raw.get("output")
+            or ""
+        )
         if isinstance(gold, list):
             gold = gold[0] if gold else ""
         return {
@@ -154,7 +175,7 @@ class ScimonAdapter:
 
     def _extract_finding_text(self, raw: dict) -> str:
         """Pull a finding-sentence-like string from a training record."""
-        for k in ("finding", "idea", "target", "output", "key_finding", "gold"):
+        for k in ("rel_sent", "finding", "idea", "target", "key_finding", "gold", "output"):
             v = raw.get(k)
             if isinstance(v, str) and v.strip():
                 return v.strip()

@@ -16,12 +16,14 @@ log = logging.getLogger(__name__)
 
 
 _PAPER_CANDIDATES = [
+    "data/dataset/target_papers.csv",     # amir-hassan25/IdeaBench actual layout
     "data/papers.csv",
     "data/target_papers.csv",
     "data/papers.jsonl",
     "data/papers.json",
 ]
 _REFERENCE_CANDIDATES = [
+    "data/dataset/filtered_references.csv",   # amir-hassan25/IdeaBench actual layout
     "data/references.csv",
     "data/filtered_references.csv",
     "data/references.jsonl",
@@ -86,7 +88,14 @@ class IdeaBenchAdapter:
         rows = _load_tabular(path)
         by_paper: dict[str, list[dict]] = {}
         for r in rows:
-            pid = str(r.get("paper_id") or r.get("target_paper_id") or r.get("parent_id") or "")
+            # amir-hassan25/IdeaBench uses camelCase "targetPaperId"
+            pid = str(
+                r.get("targetPaperId")
+                or r.get("target_paper_id")
+                or r.get("paper_id")
+                or r.get("parent_id")
+                or ""
+            )
             if not pid:
                 continue
             by_paper.setdefault(pid, []).append(r)
@@ -101,7 +110,8 @@ class IdeaBenchAdapter:
         instances = []
         skipped = 0
         for p in papers:
-            iid = str(p.get("paper_id") or p.get("id") or "")
+            # amir-hassan25/IdeaBench uses camelCase "paperId"
+            iid = str(p.get("paperId") or p.get("paper_id") or p.get("id") or "")
             if not iid:
                 skipped += 1
                 continue
@@ -109,8 +119,9 @@ class IdeaBenchAdapter:
             title = str(p.get("title") or "")
             refs_for_paper = refs.get(iid, [])
 
-            if self.filtered_ref:
-                refs_for_paper = [r for r in refs_for_paper if self._is_filtered(r)]
+            # Note: filtered_references.csv is already pre-filtered; we treat
+            # `filtered_ref=True` as "use the filtered file" (done by path) and
+            # do not additionally filter on isInfluential here.
 
             ref_abstracts = [str(r.get("abstract") or r.get("text") or "") for r in refs_for_paper]
             ref_abstracts = [a for a in ref_abstracts if a.strip()]
@@ -136,8 +147,9 @@ class IdeaBenchAdapter:
 
     @staticmethod
     def _is_filtered(r: dict) -> bool:
-        # If the dataset tags filtered refs, honor it; otherwise accept.
-        for k in ("filtered", "is_filtered", "keep"):
+        # Retained for compatibility; no longer called by default because
+        # filtered_references.csv is already the filtered file.
+        for k in ("filtered", "is_filtered", "keep", "isInfluential"):
             if k in r:
                 return bool(r[k])
         return True

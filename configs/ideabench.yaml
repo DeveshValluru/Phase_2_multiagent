@@ -3,8 +3,9 @@ benchmark: ideabench
 # Data paths (override via env vars or CLI)
 data:
   repo_root: external/IdeaBench
-  papers_path: null                # auto-detect from repo_root/data/
-  references_path: null
+  # Verified locations in amir-hassan25/IdeaBench
+  papers_path: external/IdeaBench/data/dataset/target_papers.csv
+  references_path: external/IdeaBench/data/dataset/filtered_references.csv
   # IdeaBench low-resource setting (matches Phase 1)
   num_ref: 3
   num_hyp: 3
