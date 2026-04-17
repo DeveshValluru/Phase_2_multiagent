@@ -16,17 +16,24 @@ log = logging.getLogger(__name__)
 
 
 class SentenceBERTRetriever:
-    """Build-or-load wrapper around sentence-transformers."""
+    """Build-or-load wrapper around sentence-transformers.
+
+    Forces CPU device by default because on Sol Gaudi nodes vLLM has already
+    claimed all 8 HPUs for the Llama-3.3-70B generator; sentence-transformers
+    would otherwise auto-select HPU and fail with "Device acquire failed".
+    Override via SBERT_DEVICE env var if needed.
+    """
 
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
         self.model_name = model_name
         self._model = None
+        self.device = os.environ.get("SBERT_DEVICE", "cpu")
 
     def _ensure_model(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
-            log.info("loading SentenceBERT: %s", self.model_name)
-            self._model = SentenceTransformer(self.model_name)
+            log.info("loading SentenceBERT: %s on %s", self.model_name, self.device)
+            self._model = SentenceTransformer(self.model_name, device=self.device)
 
     def encode(self, texts: list[str], batch_size: int = 64) -> np.ndarray:
         self._ensure_model()
