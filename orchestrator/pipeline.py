@@ -39,7 +39,7 @@ class Pipeline:
         if self._built:
             return
         self.client = client_from_config(self.cfg["llm"])
-        log.info("waiting for vLLM readiness at %s", self.cfg["llm"]["base_url"])
+        log.info("waiting for vLLM readiness at %s", self.client.cfg.base_url)
         self.client.wait_ready(timeout_s=900.0)
         self.client.start_keepalive(60.0)
 

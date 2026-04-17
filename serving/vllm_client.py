@@ -187,11 +187,27 @@ class VLLMClient:
 
 # ---- convenience: build client from yaml section --------------------------
 
+import re
+
+_SHELL_DEFAULT_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):-([^}]*)\}")
+
+
+def _shell_expand(v: str) -> str:
+    """Expand ${VAR} and ${VAR:-default} in a string using os.environ."""
+    # First handle ${VAR:-default}
+    def _sub(m: re.Match) -> str:
+        var, default = m.group(1), m.group(2)
+        return os.environ.get(var, default)
+    v = _SHELL_DEFAULT_RE.sub(_sub, v)
+    # Then fall back to regular $VAR / ${VAR} expansion
+    return os.path.expandvars(v)
+
+
 def client_from_config(cfg_section: dict[str, Any]) -> VLLMClient:
     """Build VLLMClient from a parsed YAML dict. Env vars expanded."""
     def expand(v):
         if isinstance(v, str):
-            return os.path.expandvars(v)
+            return _shell_expand(v)
         return v
 
     return VLLMClient(LLMConfig(
