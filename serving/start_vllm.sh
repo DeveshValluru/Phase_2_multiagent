@@ -40,6 +40,15 @@ ARGS=(
     --trust-remote-code
 )
 
+# Set served-model-name so clients can use the HF ID instead of the local path
+if [[ -n "${SERVED_MODEL_NAME:-}" ]]; then
+    ARGS+=(--served-model-name "$SERVED_MODEL_NAME")
+elif [[ "$MODEL" == *"Llama-3.3-70B-Instruct"* ]]; then
+    ARGS+=(--served-model-name "meta-llama/Llama-3.3-70B-Instruct")
+elif [[ "$MODEL" == *"Qwen3-32B"* ]]; then
+    ARGS+=(--served-model-name "Qwen/Qwen3-32B")
+fi
+
 if [[ -n "${VLLM_EXTRA_ARGS:-}" ]]; then
     # shellcheck disable=SC2086
     ARGS+=($VLLM_EXTRA_ARGS)

@@ -40,7 +40,7 @@ Key design choices:
 phase2-multiagent/
   README.md                    ← you are here
   requirements.txt
-  apptainer.def                ← container def for Gaudi-2 + vLLM
+  apptainer.def                ← legacy (not used; retained for reference)
   run.py                       ← main entry point
   configs/
     scimon.yaml
@@ -49,8 +49,9 @@ phase2-multiagent/
   adapters/                    ← scimon.py, ideabench.py (only place the two benchmarks differ)
   orchestrator/                ← pipeline.py, checkpoint.py, sharding.py
   serving/
+    sol_env.sh                 ← Sol Gaudi-2 runtime env (sourced by every SLURM script)
+    start_vllm.sh              ← launches vLLM on Gaudi (uses --served-model-name)
     vllm_client.py             ← OpenAI-compatible client w/ health check + retry + keepalive
-    start_vllm.sh              ← launches vLLM on Gaudi
   eval/
     scimon_eval.py             ← ROUGE-L + BERTScore
     ideabench_eval.py          ← BERTScore + LLM Rating + Insight Score
@@ -67,60 +68,55 @@ phase2-multiagent/
 
 ---
 
-## Upload to GitHub
-
-```bash
-# 1) Create a new empty repo on GitHub (e.g. phase2-multiagent) via the UI.
-# 2) From the project directory:
-cd phase2-multiagent
-git init
-git add .
-git commit -m "Initial commit: Phase 2 multi-agent system"
-git branch -M main
-git remote add origin https://github.com/<your-user-or-org>/phase2-multiagent.git
-git push -u origin main
-```
-
-The `.gitignore` already excludes `external/SCIMON/`, `external/IdeaBench/`,
-`logs/`, `outputs/`, `checkpoints/`, `*.sif`, and `*.npz`, so nothing bulky or
-license-entangled will be pushed.
-
----
-
 ## Running on ASU Sol (Gaudi-2)
+
+**This pipeline runs directly against Sol's pre-built vLLM env via `serving/sol_env.sh`.
+No Apptainer container is needed.** The `apptainer.def` file is kept for historical
+reference only.
 
 ### 1. Clone this repo + external deps
 
 ```bash
 ssh sol
-cd $SCRATCH
-git clone https://github.com/<your-user-or-org>/phase2-multiagent.git
-cd phase2-multiagent
+git clone https://github.com/DeveshValluru/Phase_2_multiagent.git
+cd Phase_2_multiagent
 
 # Vendor the two original paper repos under external/
 git clone https://github.com/EagleW/Scientific-Inspiration-Machines-Optimized-for-Novelty external/SCIMON
 git clone https://github.com/amir-hassan25/IdeaBench external/IdeaBench
 ```
 
-### 2. Build (or reuse) the Apptainer image
-
+If you already have one of those repos cloned elsewhere, you can symlink instead:
 ```bash
-# If Phase-1 left an image behind, point to it:
-export APPTAINER_IMAGE=$SCRATCH/images/phase2.sif
-
-# Otherwise build from the definition file (~20 min):
-mkdir -p $SCRATCH/images
-apptainer build $SCRATCH/images/phase2.sif apptainer.def
-export APPTAINER_IMAGE=$SCRATCH/images/phase2.sif
+mkdir -p external
+ln -s /path/to/existing/IdeaBench external/IdeaBench
 ```
 
-### 3. Calibrate throughput on a small batch (optional but recommended)
+### 2. Install missing Python packages (one-time, per user)
+
+Sol's pre-built env at `/packages/envs/gaudi-pytorch-vllm/` provides most deps
+(`torch`, `transformers`, `vllm`, `openai`, `pandas`, `tenacity`, etc.) but is
+**missing three packages** needed by the pipeline's retriever and evaluation code:
 
 ```bash
-# Requests a small allocation, runs the pipeline on 50 instances, prints per-instance time
-sbatch --export=ALL --gres=gpu:8 --time=02:00:00 \
-    scripts/generation_scimon.slurm
-# or:
+pip install --user sentence-transformers rouge-score bert-score
+```
+
+The install goes to `~/.local/` so it's available on every compute node
+automatically (`sol_env.sh` sets `PYTHONNOUSERSITE=0`).
+
+Verify on a Gaudi compute node:
+```bash
+srun --partition=gaudi --qos=class_gaudi --account=class_cse59827694spring2026 \
+    --gres=gpu:hl225:1 --cpus-per-task=2 --mem=24G --time=0-1:00 --pty bash
+# On the compute node:
+source serving/sol_env.sh
+python -c "import torch, transformers, sentence_transformers, rouge_score, bert_score; print('all OK')"
+```
+
+### 3. Calibrate throughput on a small batch (optional)
+
+```bash
 python scripts/calibrate.py --benchmark ideabench --n 50
 ```
 
@@ -154,6 +150,20 @@ Sharding is completely flexible — use any of:
 All members can claim shards independently. Each writes to
 `checkpoints/<bench>/<shard_tag>/generation.jsonl`. **Running the same shard
 twice is harmless** — JSONL is idempotent, merge dedupes.
+
+**Splitting work between teammates:** each teammate's outputs land in their
+own repo clone. Before merging, collect all shards to one location:
+
+```bash
+# From the merging teammate's side:
+scp -r <other_user>@sol:/path/to/Phase_2_multiagent/checkpoints/ideabench/shard_{9..16} \
+    checkpoints/ideabench/
+```
+
+**First-time vLLM warmup:** expect 15–30 minutes on first model load (HPU
+graph compilation). Watch `logs/vllm_<bench>_<jobid>.log` for
+`Application startup complete` and the main SLURM log for
+`[slurm] vLLM ready after XXXs`.
 
 ### 5. Merge shards
 
@@ -211,6 +221,8 @@ python run.py --benchmark scimon --limit 10     # smoke test
 | Symptom | Fix |
 |---|---|
 | "Could not locate SCIMON gold test set" | Set `data.gold_test_path` in `configs/scimon.yaml` to your clone's actual path. |
+| `ModuleNotFoundError: sentence_transformers` / `rouge_score` / `bert_score` | Run the `pip install --user` step in section 2. |
+| vLLM `/health` returns 200 but chat completions return 404 `model does not exist` | `start_vllm.sh` now passes `--served-model-name` for Llama/Qwen; make sure your clone is up-to-date (`git pull`). |
 | vLLM `/health` never returns 200 | Check `logs/vllm_*.log` — usually model download, OOM, or HPU driver issue. Bump `--time` if first load is slow. |
 | Judge output has 40% parse failures | Already handled: `utils/parsing.py` strips `<think>` and falls back to regex. Check `logs/` for the few that still fail. |
 | SLURM job preempted mid-run | Just resubmit the same command — checkpoints pick up where it left off. |
