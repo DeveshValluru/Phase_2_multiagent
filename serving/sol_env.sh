@@ -7,6 +7,11 @@
 # Source this from SLURM scripts:
 #     source serving/sol_env.sh
 
+# Relax strict-mode for env setup so missing optional paths don't abort the
+# caller. Restored at end of this file.
+__SOL_ENV_PREV_OPTS="$(set +o)"
+set +euo pipefail 2>/dev/null || true
+
 # Pre-built Gaudi vLLM env shipped on Sol
 export PATH=/packages/envs/gaudi-pytorch-vllm/bin:$PATH
 export PYTHONNOUSERSITE=0
@@ -17,9 +22,14 @@ export HF_HOME=/scratch/$USER/.cache/huggingface
 export HUGGINGFACE_HUB_CACHE=/scratch/$USER/.cache/huggingface/hub
 mkdir -p "$HF_HOME/hub"
 
-# Gaudi / TPC kernel path
-TPC_LIB=$(find /usr/lib /opt /packages/envs/gaudi-pytorch-vllm -name libtpc_kernels.so 2>/dev/null | head -1)
-[ -n "$TPC_LIB" ] && export GC_KERNEL_PATH="$TPC_LIB"
+# Gaudi / TPC kernel path (|| true so set -e doesn't exit if a path is missing)
+TPC_LIB=$( { find /usr/lib -name libtpc_kernels.so 2>/dev/null ; \
+              find /opt -name libtpc_kernels.so 2>/dev/null ; \
+              find /packages/envs/gaudi-pytorch-vllm -name libtpc_kernels.so 2>/dev/null ; \
+            } | head -1 || true )
+if [ -n "${TPC_LIB:-}" ]; then
+    export GC_KERNEL_PATH="$TPC_LIB"
+fi
 
 # Gaudi / vLLM runtime tuning — these are the Phase-1 values that fixed the
 # vLLM idle-crash. DO NOT LOWER VLLM_ENGINE_ITERATION_TIMEOUT_S.
@@ -38,3 +48,10 @@ rm -rf .graph_dumps/ 2>/dev/null || true
 export LLAMA_MODEL_PATH=${LLAMA_MODEL_PATH:-/data/datasets/community/huggingface/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b}
 # Qwen may not be locally cached; vLLM will download to HF_HOME on first use.
 export QWEN_MODEL_ID=${QWEN_MODEL_ID:-Qwen/Qwen3-32B}
+
+# Restore caller's shell options (e.g. set -e in the SLURM script)
+eval "$__SOL_ENV_PREV_OPTS" 2>/dev/null || true
+unset __SOL_ENV_PREV_OPTS
+echo "[sol_env] PATH head: $(echo $PATH | cut -d: -f1)"
+echo "[sol_env] LLAMA_MODEL_PATH: $LLAMA_MODEL_PATH"
+echo "[sol_env] GC_KERNEL_PATH: ${GC_KERNEL_PATH:-<not set>}"
